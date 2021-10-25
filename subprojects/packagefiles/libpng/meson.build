@@ -69,6 +69,7 @@ if host_machine.cpu_family() == 'aarch64' or cc.get_define('__ARM_NEON') != ''
             input : msvc_preprocessed_asm_files,
             command : [msvc_armasm, '@INPUT@', '/Fo@OUTPUT@', '-I@OUTDIR@'],
         )
+        add_project_arguments('-D__aarch64__', language : 'c')
     else
         png_src += files(['arm/filter_neon.S'])    
     endif
