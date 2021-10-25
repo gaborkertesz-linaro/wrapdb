@@ -60,6 +60,7 @@ class TestReleases(unittest.TestCase):
 
         system = platform.system().lower()
         cls.skip = cls.ci_config[f'skip_{system}']
+        cls.fatal_warnings = os.environ.get('TEST_FATAL_WARNINGS', 'yes') == 'yes'
 
     def test_releases_json(self):
         # All tags must be in the releases file
@@ -182,18 +183,11 @@ class TestReleases(unittest.TestCase):
             if name in self.skip:
                 skipped.append(name)
                 continue
-            current_version, _ = info['versions'][0].split('-')
-
-            config = configparser.ConfigParser(interpolation=None)
-            config.read(f'subprojects/{name}.wrap')
-            wrap_section = config['wrap-file']
             try:
                 with tempfile.TemporaryDirectory() as d:
                     self.check_new_release(name, d)
                     passed.append(name)
-                    self.check_meson_version(name, current_version,
-                        self.get_patch_path(wrap_section), d)
-            except subprocess. CalledProcessError:
+            except subprocess.CalledProcessError:
                 failed.append(name)
         print(f'{len(passed)} passed:', ', '.join(passed))
         print(f'{len(skipped)} skipped:', ', '.join(skipped))
@@ -223,7 +217,9 @@ class TestReleases(unittest.TestCase):
         ci = self.ci_config.get(name, {})
         if ci.get('linux_only', False) and not is_linux():
             return
-        options = ['--fatal-meson-warnings', f'-Dwraps={name}']
+        options = [f'-Dwraps={name}']
+        if ci.get('fatal_warnings', True) and self.fatal_warnings:
+            options.append('--fatal-meson-warnings')
         if is_windows():
             # On Windows we need to install python modules outside of prefix.
             for i in {'purelib', 'platlib'}:
@@ -239,9 +235,23 @@ class TestReleases(unittest.TestCase):
             else:
                 s = ', '.join(debian_packages)
                 print(f'The following packages could be required: {s}')
-        subprocess.check_call(['meson', 'setup', builddir] + options)
+        try:
+            subprocess.check_call(['meson', 'setup', builddir] + options)
+        except subprocess.CalledProcessError:
+            log_file = Path(builddir, 'meson-logs', 'meson-log.txt')
+            print('::group::==== meson-log.txt ====')
+            print(log_file.read_text(encoding='utf-8'))
+            print('::endgroup::')
+            raise
         subprocess.check_call(['meson', 'compile', '-C', builddir])
-        subprocess.check_call(['meson', 'test', '-C', builddir])
+        try:
+            subprocess.check_call(['meson', 'test', '-C', builddir, '--print-errorlogs'])
+        except subprocess.CalledProcessError:
+            log_file = Path(builddir, 'meson-logs', 'testlog.txt')
+            print('::group::==== testlog.txt ====')
+            print(log_file.read_text(encoding='utf-8'))
+            print('::endgroup::')
+            raise
 
     def is_permitted_file(self, subproject: str, filename: str):
         if filename in PERMITTED_FILES:
